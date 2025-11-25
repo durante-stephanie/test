@@ -66,12 +66,19 @@ async function run() {
 
     // 4. Read Coding Standards
     let codingStandards = "Follow general Angular best practices.";
-    try {
-      if (fs.existsSync("Coding Guidelines/CODING_STANDARDS.md")) {
-        codingStandards = fs.readFileSync("Coding Guidelines/CODING_STANDARDS.md", "utf8");
+    // Try to find the file in probable locations
+    const possiblePaths = [
+      ".github/Coding Guidelines/CODING_STANDARDS.md",
+      "Coding Guidelines/CODING_STANDARDS.md",
+      ".github/CODING_STANDARDS.md"
+    ];
+
+    for (const path of possiblePaths) {
+      if (fs.existsSync(path)) {
+        codingStandards = fs.readFileSync(path, "utf8");
+        console.log(`Loaded coding standards from: ${path}`);
+        break;
       }
-    } catch (e) {
-      console.log("Could not read CODING_STANDARDS.md");
     }
 
     // 5. Build Prompt for "Inline" Review

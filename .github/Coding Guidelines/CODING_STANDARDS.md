@@ -62,6 +62,10 @@ Do not use querySelector, getElementById, or addEventListener. Use Angular refs 
 
 Formatting & Structure
 
+Line Length:
+
+MAXIMUM: 80 characters per line.
+
 Indentation:
 
 When splitting elements to multiple lines, add at least a double tab (indentation) to indicate continuation.

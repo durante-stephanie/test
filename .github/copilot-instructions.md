@@ -22,6 +22,7 @@ Comments:
 
 Use TODO comments in this format:
 // TODO(Lastname, Givenname): What needs to be done (TS)
+
 <!-- TODO(Lastname, Givenname): What needs to be done --> (HTML)
 
 Angular Best Practices
@@ -61,6 +62,10 @@ No Vanilla JS:
 Do not use querySelector, getElementById, or addEventListener. Use Angular refs and bindings.
 
 Formatting & Structure
+
+Line Length:
+
+MAXIMUM: 80 characters per line.
 
 Indentation:
 
