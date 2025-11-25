@@ -15,8 +15,8 @@ async function run() {
 
     // Initialize Gemini
     const genAI = new GoogleGenerativeAI(apiKey);
-    // FIX: Changed model to 'gemini-1.5-flash-latest' to fix 404 error
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+    // FIX: Using the specific pinned version 'gemini-1.5-flash-001' for stability
+    const model = genAI.getGenerativeModel({ model: "gemini-3-pro-preview" });
 
     // Initialize GitHub Client
     const octokit = github.getOctokit(githubToken);
