@@ -16,7 +16,7 @@ async function run() {
     // Initialize Gemini
     const genAI = new GoogleGenerativeAI(apiKey);
     // FIX: Using the specific pinned version 'gemini-1.5-flash-001' for stability
-    const model = genAI.getGenerativeModel({ model: "gemini-3-pro-preview" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     // Initialize GitHub Client
     const octokit = github.getOctokit(githubToken);
