@@ -30,7 +30,7 @@ export class DataService {
 
   getDetails(id: number): Observable<DetailsResponse> {
     return this.http.get<DetailsResponse>(
-        `https://api.example.com/details/${id}`
+        	`https://api.example.com/details/${id}`
     );
   }
 }
