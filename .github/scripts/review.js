@@ -16,9 +16,6 @@ const CONFIG = {
 
 // --- Helper Functions ---
 
-/**
- * Initializes the Google Generative AI model.
- */
 function initializeAI(apiKey) {
   const genAI = new GoogleGenerativeAI(apiKey);
   return genAI.getGenerativeModel({
@@ -36,8 +33,9 @@ function initializeAI(apiKey) {
                 path: { type: SchemaType.STRING },
                 line: { type: SchemaType.NUMBER },
                 comment: { type: SchemaType.STRING },
+                snippet: { type: SchemaType.STRING },
               },
-              required: ["path", "line", "comment"],
+              required: ["path", "line", "comment", "snippet"],
             },
           },
           conclusion: {
@@ -51,9 +49,6 @@ function initializeAI(apiKey) {
   });
 }
 
-/**
- * Fetches the pull request diff from GitHub.
- */
 async function getPullRequestDiff(octokit, context) {
   const { data: prDiff } = await octokit.rest.pulls.get({
     owner: context.repo.owner,
@@ -64,9 +59,6 @@ async function getPullRequestDiff(octokit, context) {
   return prDiff;
 }
 
-/**
- * Reads coding guidelines from the repository.
- */
 function loadCodingGuidelines() {
   const workspace = process.env.GITHUB_WORKSPACE || ".";
   const standardsPath = path.join(workspace, ".github", CONFIG.files.codingStandards);
@@ -80,25 +72,39 @@ function loadCodingGuidelines() {
   return "";
 }
 
-/**
- * Constructs the prompt for the AI model.
- */
 function createPrompt(rules, diff) {
   return `
     You are a strict Senior Angular Code Reviewer.
     
-    ### CODING GUIDELINES:
+    ### CODING GUIDELINES (SOURCE OF TRUTH):
     ${rules}
 
-    ### CRITICAL INSTRUCTIONS FOR LINE NUMBERS:
-    - You are reviewing a GIT DIFF. 
-    - The "line" property MUST be the line number in the *new* file (the right side of the diff).
-    - If you are unsure of the exact line, comment on the first line of the new code block.
-    - **Do not** hallucinate line numbers that don't exist in the diff.
+    ### ACCURACY & ALIGNMENT INSTRUCTIONS (CRITICAL):
+    1. **Line Number Calculation:** You are reviewing a Git Diff. You must calculate the correct line number for the *NEW* file.
+       - Look for the chunk header: \`@@ -old_start,old_count +new_start,new_count @@\`
+       - The line immediately following the header is line \`new_start\`.
+       - For every subsequent line:
+         - If it starts with \` \` (space), increment the line count.
+         - If it starts with \`+\` (plus), increment the line count.
+         - If it starts with \`-\` (minus), IGNORE it (do not increment).
+       - **Assign the violation to the specific line number calculated above.** Do not guess.
+    
+    2. **Line Length:** STRICTLY enforce the 80-character limit. 
+       - Count the characters in the line.
+       - If it is > 80 chars, flag it.
+       - Do not flag lines that are 80 chars or less.
+
+    3. **Hallucination Prevention:**
+       - **Nested Subscriptions:** Only flag if you see \`.subscribe\` *inside* the callback of another \`.subscribe\`. Do not flag top-level subscriptions in methods.
+       - **Types:** Distinguish between "Forbidden usage of 'any'" (e.g. \`data: any\`) vs "Missing type" (e.g. \`data\`).
 
     ### ADDITIONAL CHECKS:
     - **FORBIDDEN:** 'any', 'ngStyle', '*ngIf', '*ngFor'.
     - **REQUIRED:** signals, @if, @for, typed interfaces.
+
+    ### CRITICAL INSTRUCTIONS:
+    - **NO NAMES:** Do not address the user by name.
+    - **SNIPPET:** You MUST populate the "snippet" field with the exact code line you are flagging.
 
     ### TASK:
     Review the diff below. Return a JSON object.
@@ -110,9 +116,6 @@ function createPrompt(rules, diff) {
   `;
 }
 
-/**
- * Posts review comments to the GitHub Pull Request.
- */
 async function postReview(octokit, context, reviewData) {
   if (!reviewData.reviews || reviewData.reviews.length === 0) return;
 
@@ -121,7 +124,7 @@ async function postReview(octokit, context, reviewData) {
     .map((r) => ({
       path: r.path,
       line: r.line,
-      body: `🤖 **AI Review:** ${r.comment}`,
+      body: `🤖 **AI Review:** ${r.comment}\n\n\`\`\`typescript\n${r.snippet}\n\`\`\``,
     }));
 
   if (validComments.length > 0) {
@@ -129,7 +132,7 @@ async function postReview(octokit, context, reviewData) {
       owner: context.repo.owner,
       repo: context.repo.repo,
       pull_number: context.payload.pull_request.number,
-      event: reviewData.conclusion === "APPROVE" ? "COMMENT" : "REQUEST_CHANGES",
+      event: reviewData.conclusion,
       comments: validComments,
       body:
         reviewData.conclusion === "APPROVE"
@@ -138,8 +141,6 @@ async function postReview(octokit, context, reviewData) {
     });
   }
 }
-
-// --- Main Execution ---
 
 async function run() {
   try {
@@ -162,8 +163,6 @@ async function run() {
     }
 
     const rules = loadCodingGuidelines();
-    if (!rules) console.log("Using default strict Angular rules.");
-
     const prompt = createPrompt(rules, prDiff);
 
     console.log(`Sending diff to ${CONFIG.modelName}...`);
@@ -175,7 +174,7 @@ async function run() {
       reviewData = JSON.parse(responseText);
     } catch (e) {
       console.error("JSON Parse Error:", responseText);
-      return;
+      return; 
     }
 
     await postReview(octokit, context, reviewData);
