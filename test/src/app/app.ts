@@ -51,8 +51,8 @@ export class DataService {
     <button (click)="doSomething()">Click Me</button>
   `,
   styles: [`
-    :host {
-      ::ng-deep .custom-class {
+    ::ng-deep .custom-class  {
+      {
         background-color: yellow;
       }
     }
@@ -76,8 +76,8 @@ export class TestViolationComponent {
 
   doSomething() {
     // Guideline: Add double tab indentation for split lines[cite: 162].
-    this.data = 'Some very long string that is definitely going to exceed the' +
-        'eighty character limit set in the editor configuration to test if ' +
+    this.data = 'Some very long string that is definitely going to exceed the'   +
+      'eighty character limit set in the editor configuration to test if ' +
         'the linter catches it properly.';
 
     // Guideline: Use pipe() and RXJS operators[cite: 220].
@@ -86,5 +86,7 @@ export class TestViolationComponent {
     ).subscribe((details) => {
       console.log(details);
     });
+
+
   }
 }
