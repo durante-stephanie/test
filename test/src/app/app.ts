@@ -4,14 +4,11 @@ import { HttpClient } from '@angular/common/http';
 import { switchMap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
 
-// Guideline: Use Pascal case for type aliases[cite: 62].
-// Guideline: Always use type keyword to structure an object instead of interface[cite: 51].
 export type DataResponse = {
   id: number;
   content: string;
 };
 
-// FIX: Added a specific type model for the details response to avoid 'any'.
 export type DetailsResponse = {
   id: number;
   details: string;
@@ -25,11 +22,9 @@ export class DataService {
   private http = inject(HttpClient);
 
   getData(): Observable<DataResponse> {
-    // Guideline: Always create a model to structure HTTP response.
     return this.http.get<DataResponse>('https://api.example.com/data');
   }
 
-  // FIX: Replaced Observable<any> with Observable<DetailsResponse>.
   getDetails(id: number): Observable<DetailsResponse> {
     return this.http.get<DetailsResponse>
     (`https://api.example.com/details/${id}`);
@@ -56,7 +51,6 @@ export class DataService {
     <button (click)="doSomething()">Click Me</button>
   `,
   styles: [`
-    /* Guideline: Include ::ng-deep in a parent container like :host[cite: 81]. */
     :host {
       ::ng-deep .custom-class {
         background-color: yellow;
@@ -86,7 +80,6 @@ export class TestViolationComponent {
         'eighty character limit set in the editor configuration to test if ' +
         'the linter catches it properly.';
 
-    // Guideline: Do not create observable inside a subscription (nesting)[cite: 219].
     // Guideline: Use pipe() and RXJS operators[cite: 220].
     this.dataService.getData().pipe(
       switchMap((response) => this.dataService.getDetails(response.id))
