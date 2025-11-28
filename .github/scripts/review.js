@@ -79,28 +79,32 @@ function createPrompt(rules, diff) {
     ### CODING GUIDELINES (SOURCE OF TRUTH):
     ${rules}
 
-    ### HALLUCINATION PREVENTION (READ CAREFULLY):
-    1. **Line Length:** STRICTLY enforce the 80 character limit per line as per the guidelines. Flag any line that exceeds this limit.
-    2. **Nested Subscriptions:** A "Nested Subscription" is strictly defined as calling \`.subscribe()\` *inside* the callback function of another \`.subscribe()\`. 
-       - ❌ VIOLATION: \`obs1.subscribe(val => { obs2.subscribe(...) })\`
-       - ✅ OK: \`function() { obs1.subscribe(...) }\` (This is NOT nested).
-    3. **Types:** - If you see \`param: any\`, flag it as "Forbidden usage of 'any'". 
-       - If you see \`param\`, flag it as "Missing type definition".
-       - Do NOT confuse the two.
-    4. **HttpClient:** Ensure you strictly check if \`HttpClient\` is injected in a Component constructor. If it is a Service, it is allowed.
+    ### ACCURACY & ALIGNMENT INSTRUCTIONS (CRITICAL):
+    1. **Line Number Calculation:** You are reviewing a Git Diff. You must calculate the correct line number for the *NEW* file.
+       - Look for the chunk header: \`@@ -old_start,old_count +new_start,new_count @@\`
+       - The line immediately following the header is line \`new_start\`.
+       - For every subsequent line:
+         - If it starts with \` \` (space), increment the line count.
+         - If it starts with \`+\` (plus), increment the line count.
+         - If it starts with \`-\` (minus), IGNORE it (do not increment).
+       - **Assign the violation to the specific line number calculated above.** Do not guess.
+    
+    2. **Line Length:** STRICTLY enforce the 80-character limit. 
+       - Count the characters in the line.
+       - If it is > 80 chars, flag it.
+       - Do not flag lines that are 80 chars or less.
+
+    3. **Hallucination Prevention:**
+       - **Nested Subscriptions:** Only flag if you see \`.subscribe\` *inside* the callback of another \`.subscribe\`. Do not flag top-level subscriptions in methods.
+       - **Types:** Distinguish between "Forbidden usage of 'any'" (e.g. \`data: any\`) vs "Missing type" (e.g. \`data\`).
+
+    ### ADDITIONAL CHECKS:
+    - **FORBIDDEN:** 'any', 'ngStyle', '*ngIf', '*ngFor'.
+    - **REQUIRED:** signals, @if, @for, typed interfaces.
 
     ### CRITICAL INSTRUCTIONS:
-    - **NO NAMES:** Do not address the user by name or username. Keep it professional.
-    - **NO MENTIONS:** When referring to Angular control flow (like @if, @for), **ALWAYS** wrap them in backticks (e.g., \`@if\`) to avoid tagging GitHub users.
-    - **SNIPPET:** You MUST populate the "snippet" field with the exact code you are flagging.
-    - **LINE NUMBERS:** Ensure the line number matches the *new* file in the diff.
-
-    ### TEST INSTRUCTIONS (Verify these specific cases):
-    - Check for correct usage of Angular Control Flow syntax:
-      - \`@if\` blocks
-      - \`@for\` blocks
-      - \`@switch\` blocks
-    - Ensure legacy directives like \`*ngIf\` or \`*ngFor\` are FLAGGED as violations if the guidelines require the new syntax.
+    - **NO NAMES:** Do not address the user by name.
+    - **SNIPPET:** You MUST populate the "snippet" field with the exact code line you are flagging.
 
     ### TASK:
     Review the diff below. Return a JSON object.
@@ -118,13 +122,8 @@ async function postReview(octokit, context, reviewData) {
   const validComments = reviewData.reviews
     .filter((r) => r.line > 0)
     .map((r) => {
-      // SANITIZATION: Escape @if, @for, @switch, @let to prevent accidental user tagging
-      // We replace "@keyword" with "`@keyword`" if it's not already inside backticks.
-      // A simple regex approach to ensure common Angular keywords are safe.
-      let safeComment = r.comment.replace(/(@(if|for|switch|let|case|default|else))/g, '`$1`');
-      // Clean up double backticks if they happened (e.g. ``@if``)
-      safeComment = safeComment.replace(/``/g, '`');
-
+      let safeComment = r.comment.replace(/@(if|for|switch|let|case|default|else|empty)/g, '@\u200B$1');
+      
       return {
         path: r.path,
         line: r.line,
@@ -179,12 +178,11 @@ async function run() {
       reviewData = JSON.parse(responseText);
     } catch (e) {
       console.error("JSON Parse Error:", responseText);
-      return; // Do not fail if AI glitches, just skip
+      return; 
     }
 
     await postReview(octokit, context, reviewData);
 
-    // Block the merge if violations are found
     if (reviewData.conclusion === "REQUEST_CHANGES") {
       core.setFailed(
         "❌ Blocking Merge: Violations of Coding Guidelines found. Please fix the issues commented by the AI."
