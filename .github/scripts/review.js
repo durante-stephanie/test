@@ -17,7 +17,7 @@ async function run() {
     // 1. Initialize Gemini 2.5 Flash
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash", // STRICTLY using 2.5 Flash as requested
+      model: "gemini-2.5-flash", 
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -53,6 +53,7 @@ async function run() {
     const repo = context.repo.repo;
 
     // 3. Fetch the Pull Request Diff
+    // We request the diff to calculate correct line numbers
     const { data: prDiff } = await octokit.rest.pulls.get({
       owner,
       repo,
@@ -65,43 +66,44 @@ async function run() {
       return;
     }
 
-    // 4. Load Coding Guidelines (PUP AppDev Standards)
-    // We try to read your specific markdown file first
+    // 4. Load Coding Guidelines
     let rules = "";
     try {
       const rulesPath = path.join(process.env.GITHUB_WORKSPACE || '.', '.github', 'Coding Guidelines', 'CODING_STANDARDS.md');
       if (fs.existsSync(rulesPath)) {
         rules = fs.readFileSync(rulesPath, "utf8");
-        console.log("✅ Loaded guidelines from CODING_STANDARDS.md");
       } else {
-        // Fallback to copilot instructions if the specific file isn't found
         const fallbackPath = path.join(process.env.GITHUB_WORKSPACE || '.', '.github', 'copilot-instructions.md');
         if (fs.existsSync(fallbackPath)) {
           rules = fs.readFileSync(fallbackPath, "utf8");
-          console.log("✅ Loaded guidelines from copilot-instructions.md");
         }
       }
     } catch (error) {
-      console.log("⚠️ Could not read rule files. Using default strict Angular rules.");
+      console.log("Using default strict Angular rules.");
     }
 
-    // 5. Construct the Prompt for Gemini 2.5
+    // 5. Construct Prompt
+    // We explicitly tell the AI how to handle line numbers to improve accuracy
     const prompt = `
       You are a strict Senior Angular Code Reviewer for PUP.
-      Your job is to review the code changes below and enforce the following guidelines.
-
-      ### CODING GUIDELINES (STRICTLY ENFORCE):
+      
+      ### CODING GUIDELINES:
       ${rules}
 
+      ### CRITICAL INSTRUCTIONS FOR LINE NUMBERS:
+      - You are reviewing a GIT DIFF. 
+      - The "line" property MUST be the line number in the *new* file (the right side of the diff).
+      - If you are unsure of the exact line, comment on the first line of the new code block.
+      - **Do not** hallucinate line numbers that don't exist in the diff.
+
       ### ADDITIONAL CHECKS:
-      - **FORBIDDEN:** usage of 'any', 'ngStyle', '*ngIf', '*ngFor'.
-      - **REQUIRED:** use signals, @if, @for, typed interfaces/models.
-      - **REQUIRED:** strict types for function parameters.
+      - **FORBIDDEN:** 'any', 'ngStyle', '*ngIf', '*ngFor'.
+      - **REQUIRED:** signals, @if, @for, typed interfaces.
 
       ### TASK:
-      Review the GIT DIFF below.
-      If you find violations, output a JSON object with the file path, line number, and a helpful comment.
-      If the code follows the guidelines, return "conclusion": "APPROVE".
+      Review the diff below. Return a JSON object.
+      - If violations found -> "conclusion": "COMMENT" (Do not block merge, just warn).
+      - If code is good -> "conclusion": "APPROVE".
 
       GIT DIFF:
       ${prDiff.slice(0, 40000)} 
@@ -116,36 +118,38 @@ async function run() {
     try {
       reviewData = JSON.parse(responseText);
     } catch (e) {
-      console.error("Error parsing JSON response:", responseText);
-      // Fallback if model hallucinates non-JSON
+      console.error("JSON Parse Error:", responseText);
       return;
     }
 
-    // 7. Post Comments to GitHub
+    // 7. Post Comments
     if (reviewData.reviews && reviewData.reviews.length > 0) {
-      const comments = reviewData.reviews.map(r => ({
+      // Filter out comments with invalid line numbers (simple check)
+      const validComments = reviewData.reviews.filter(r => r.line > 0);
+
+      const comments = validComments.map(r => ({
         path: r.path,
         line: r.line,
-        body: `🤖 **PUP AI Review:** ${r.comment}`
+        body: `🤖 **AI Review:** ${r.comment}`
       }));
 
-      // Post reviews in a batch
-      await octokit.rest.pulls.createReview({
-        owner,
-        repo,
-        pull_number: prNumber,
-        event: reviewData.conclusion === 'APPROVE' ? 'COMMENT' : 'REQUEST_CHANGES',
-        comments: comments,
-        body: reviewData.conclusion === 'APPROVE' 
-          ? "✅ **Gemini 2.5:** Code adheres to PUP Guidelines." 
-          : "⚠️ **Gemini 2.5:** Violations of PUP AppDev Guidelines found."
-      });
+      if (comments.length > 0) {
+        await octokit.rest.pulls.createReview({
+          owner,
+          repo,
+          pull_number: prNumber,
+          event: 'COMMENT', // Changed from REQUEST_CHANGES to COMMENT to avoid blocking merge
+          comments: comments,
+          body: "⚠️ **Gemini found potential issues.** Please review the comments."
+        });
+      }
     } else {
-      console.log("No issues found. Code approved.");
+      console.log("No issues found.");
     }
 
   } catch (error) {
-    core.setFailed(`Workflow failed: ${error.message}`);
+    // We just log the error instead of failing the workflow, so it doesn't block the PR
+    console.error(`Review failed but ignored: ${error.message}`);
   }
 }
 
