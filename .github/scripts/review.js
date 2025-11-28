@@ -4,6 +4,143 @@ const core = require("@actions/core");
 const fs = require("fs");
 const path = require("path");
 
+// --- Configuration ---
+const CONFIG = {
+  modelName: "gemini-2.5-flash",
+  files: {
+    codingStandards: "Coding Guidelines/CODING_STANDARDS.md",
+    copilotInstructions: "copilot-instructions.md",
+  },
+  diffLimit: 40000,
+};
+
+// --- Helper Functions ---
+
+/**
+ * Initializes the Google Generative AI model.
+ */
+function initializeAI(apiKey) {
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({
+    model: CONFIG.modelName,
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: SchemaType.OBJECT,
+        properties: {
+          reviews: {
+            type: SchemaType.ARRAY,
+            items: {
+              type: SchemaType.OBJECT,
+              properties: {
+                path: { type: SchemaType.STRING },
+                line: { type: SchemaType.NUMBER },
+                comment: { type: SchemaType.STRING },
+              },
+              required: ["path", "line", "comment"],
+            },
+          },
+          conclusion: {
+            type: SchemaType.STRING,
+            enum: ["APPROVE", "REQUEST_CHANGES", "COMMENT"],
+          },
+        },
+        required: ["reviews", "conclusion"],
+      },
+    },
+  });
+}
+
+/**
+ * Fetches the pull request diff from GitHub.
+ */
+async function getPullRequestDiff(octokit, context) {
+  const { data: prDiff } = await octokit.rest.pulls.get({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    pull_number: context.payload.pull_request.number,
+    mediaType: { format: "diff" },
+  });
+  return prDiff;
+}
+
+/**
+ * Reads coding guidelines from the repository.
+ */
+function loadCodingGuidelines() {
+  const workspace = process.env.GITHUB_WORKSPACE || ".";
+  const standardsPath = path.join(workspace, ".github", CONFIG.files.codingStandards);
+  const fallbackPath = path.join(workspace, ".github", CONFIG.files.copilotInstructions);
+
+  if (fs.existsSync(standardsPath)) {
+    return fs.readFileSync(standardsPath, "utf8");
+  } else if (fs.existsSync(fallbackPath)) {
+    return fs.readFileSync(fallbackPath, "utf8");
+  }
+  return "";
+}
+
+/**
+ * Constructs the prompt for the AI model.
+ */
+function createPrompt(rules, diff) {
+  return `
+    You are a strict Senior Angular Code Reviewer.
+    
+    ### CODING GUIDELINES:
+    ${rules}
+
+    ### CRITICAL INSTRUCTIONS FOR LINE NUMBERS:
+    - You are reviewing a GIT DIFF. 
+    - The "line" property MUST be the line number in the *new* file (the right side of the diff).
+    - If you are unsure of the exact line, comment on the first line of the new code block.
+    - **Do not** hallucinate line numbers that don't exist in the diff.
+
+    ### ADDITIONAL CHECKS:
+    - **FORBIDDEN:** 'any', 'ngStyle', '*ngIf', '*ngFor'.
+    - **REQUIRED:** signals, @if, @for, typed interfaces.
+
+    ### TASK:
+    Review the diff below. Return a JSON object.
+    - If violations found -> "conclusion": "REQUEST_CHANGES".
+    - If code is good -> "conclusion": "APPROVE".
+
+    GIT DIFF:
+    ${diff.slice(0, CONFIG.diffLimit)} 
+  `;
+}
+
+/**
+ * Posts review comments to the GitHub Pull Request.
+ */
+async function postReview(octokit, context, reviewData) {
+  if (!reviewData.reviews || reviewData.reviews.length === 0) return;
+
+  const validComments = reviewData.reviews
+    .filter((r) => r.line > 0)
+    .map((r) => ({
+      path: r.path,
+      line: r.line,
+      body: `🤖 **AI Review:** ${r.comment}`,
+    }));
+
+  if (validComments.length > 0) {
+    await octokit.rest.pulls.createReview({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      pull_number: context.payload.pull_request.number,
+      event: reviewData.conclusion === "APPROVE" ? "COMMENT" : "REQUEST_CHANGES",
+      comments: validComments,
+      body:
+        reviewData.conclusion === "APPROVE"
+          ? "✅ Code looks good."
+          : "⚠️ **Violations found.** Please fix the issues below.",
+    });
+  }
+}
+
+// --- Main Execution ---
+
 async function run() {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -14,106 +151,25 @@ async function run() {
       return;
     }
 
-    // 1. Initialize Gemini 2.5 Flash
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash", 
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: SchemaType.OBJECT,
-          properties: {
-            reviews: {
-              type: SchemaType.ARRAY,
-              items: {
-                type: SchemaType.OBJECT,
-                properties: {
-                  path: { type: SchemaType.STRING },
-                  line: { type: SchemaType.NUMBER },
-                  comment: { type: SchemaType.STRING },
-                },
-                required: ["path", "line", "comment"],
-              },
-            },
-            conclusion: {
-              type: SchemaType.STRING,
-              enum: ["APPROVE", "REQUEST_CHANGES", "COMMENT"],
-            },
-          },
-          required: ["reviews", "conclusion"],
-        },
-      },
-    });
-
-    // 2. Initialize GitHub Context
+    const model = initializeAI(apiKey);
     const octokit = github.getOctokit(githubToken);
     const context = github.context;
-    const prNumber = context.payload.pull_request.number;
-    const owner = context.repo.owner;
-    const repo = context.repo.repo;
 
-    // 3. Fetch the Pull Request Diff
-    // We request the diff to calculate correct line numbers
-    const { data: prDiff } = await octokit.rest.pulls.get({
-      owner,
-      repo,
-      pull_number: prNumber,
-      mediaType: { format: "diff" },
-    });
-
+    const prDiff = await getPullRequestDiff(octokit, context);
     if (!prDiff) {
       console.log("No changes found in this PR.");
       return;
     }
 
-    // 4. Load Coding Guidelines
-    let rules = "";
-    try {
-      const rulesPath = path.join(process.env.GITHUB_WORKSPACE || '.', '.github', 'Coding Guidelines', 'CODING_STANDARDS.md');
-      if (fs.existsSync(rulesPath)) {
-        rules = fs.readFileSync(rulesPath, "utf8");
-      } else {
-        const fallbackPath = path.join(process.env.GITHUB_WORKSPACE || '.', '.github', 'copilot-instructions.md');
-        if (fs.existsSync(fallbackPath)) {
-          rules = fs.readFileSync(fallbackPath, "utf8");
-        }
-      }
-    } catch (error) {
-      console.log("Using default strict Angular rules.");
-    }
+    const rules = loadCodingGuidelines();
+    if (!rules) console.log("Using default strict Angular rules.");
 
-    // 5. Construct Prompt
-    // We explicitly tell the AI how to handle line numbers to improve accuracy
-    const prompt = `
-      You are a strict Senior Angular Code Reviewer for PUP.
-      
-      ### CODING GUIDELINES:
-      ${rules}
+    const prompt = createPrompt(rules, prDiff);
 
-      ### CRITICAL INSTRUCTIONS FOR LINE NUMBERS:
-      - You are reviewing a GIT DIFF. 
-      - The "line" property MUST be the line number in the *new* file (the right side of the diff).
-      - If you are unsure of the exact line, comment on the first line of the new code block.
-      - **Do not** hallucinate line numbers that don't exist in the diff.
-
-      ### ADDITIONAL CHECKS:
-      - **FORBIDDEN:** 'any', 'ngStyle', '*ngIf', '*ngFor'.
-      - **REQUIRED:** signals, @if, @for, typed interfaces.
-
-      ### TASK:
-      Review the diff below. Return a JSON object.
-      - If violations found -> "conclusion": "COMMENT" (Do not block merge, just warn).
-      - If code is good -> "conclusion": "APPROVE".
-
-      GIT DIFF:
-      ${prDiff.slice(0, 40000)} 
-    `;
-
-    // 6. Generate Review
-    console.log("Sending diff to Gemini 2.5 Flash...");
+    console.log(`Sending diff to ${CONFIG.modelName}...`);
     const result = await model.generateContent(prompt);
     const responseText = result.response.text();
-    
+
     let reviewData;
     try {
       reviewData = JSON.parse(responseText);
@@ -122,34 +178,17 @@ async function run() {
       return;
     }
 
-    // 7. Post Comments
-    if (reviewData.reviews && reviewData.reviews.length > 0) {
-      // Filter out comments with invalid line numbers (simple check)
-      const validComments = reviewData.reviews.filter(r => r.line > 0);
+    await postReview(octokit, context, reviewData);
 
-      const comments = validComments.map(r => ({
-        path: r.path,
-        line: r.line,
-        body: `🤖 **AI Review:** ${r.comment}`
-      }));
-
-      if (comments.length > 0) {
-        await octokit.rest.pulls.createReview({
-          owner,
-          repo,
-          pull_number: prNumber,
-          event: 'COMMENT', // Changed from REQUEST_CHANGES to COMMENT to avoid blocking merge
-          comments: comments,
-          body: "⚠️ **Gemini found potential issues.** Please review the comments."
-        });
-      }
+    if (reviewData.conclusion === "REQUEST_CHANGES") {
+      core.setFailed(
+        "❌ Blocking Merge: Violations of Coding Guidelines found. Please fix the issues commented by the AI."
+      );
     } else {
       console.log("No issues found.");
     }
-
   } catch (error) {
-    // We just log the error instead of failing the workflow, so it doesn't block the PR
-    console.error(`Review failed but ignored: ${error.message}`);
+    core.setFailed(`Review failed: ${error.message}`);
   }
 }
 
