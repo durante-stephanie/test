@@ -4,7 +4,6 @@ const core = require("@actions/core");
 const fs = require("fs");
 const path = require("path");
 
-// --- Configuration ---
 const CONFIG = {
   modelName: "gemini-2.5-flash",
   files: {
@@ -12,10 +11,8 @@ const CONFIG = {
     copilotInstructions: "copilot-instructions.md",
   },
   diffLimit: 40000,
-  maxLineLength: 80, // Hard limit handled by JS
+  maxLineLength: 80,
 };
-
-// --- Helper Functions ---
 
 function initializeAI(apiKey) {
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -60,7 +57,6 @@ async function getPullRequestDiff(octokit, context) {
   return prDiff;
 }
 
-// Manually parse the diff to get accurate line numbers
 function parseDiff(diff) {
   const lines = diff.split('\n');
   let currentFile = '';
@@ -115,7 +111,7 @@ function createPrompt(rules, numberedDiffString) {
   return `
     You are a strict Senior Angular Code Reviewer.
     
-    ### CODING GUIDELINES (SOURCE OF TRUTH):
+    ### CODING GUIDELINES:
     ${rules}
 
     ### ACCURACY INSTRUCTIONS:
@@ -124,7 +120,8 @@ function createPrompt(rules, numberedDiffString) {
     2. **Line Length:** IGNORE line length violations. The system checks this automatically.
     
     ### HALLUCINATION PREVENTION (CRITICAL):
-    - **Inferred Types:** Do NOT flag missing types for arrow function parameters in callbacks (e.g. \`.subscribe(data => ...)\` is OK). Only flag missing types in explicit function declarations.
+    - **Inferred Types:** Do NOT flag missing types for arrow function parameters in callbacks (e.g. \`.subscribe(data => ...)\` is OK).
+        Only flag missing types in explicit function declarations.
     - **Nested Subscriptions:** Only flag \`.subscribe\` if you clearly see it *inside* another \`.subscribe\` block.
     
     ### OUTPUT RULES:
@@ -133,7 +130,7 @@ function createPrompt(rules, numberedDiffString) {
 
     ### TASK:
     Review the code lines below. Return a JSON object.
-    - If violations found -> "conclusion": "REQUEST_CHANGES".
+    - If violations found -> "conclusion": "COMMENT".
     - If code is good -> "conclusion": "APPROVE".
 
     CODE TO REVIEW:
@@ -148,11 +145,12 @@ async function postReview(octokit, context, reviewData, automaticComments) {
     const aiComments = reviewData.reviews
       .filter((r) => r.line > 0)
       .map((r) => {
+        // Escape special characters to prevent GitHub markdown issues
         let safeComment = r.comment.replace(/(@(if|for|switch|let|case|default|else|empty))/g, '`$1`');
         return {
           path: r.path,
           line: r.line,
-          body: `🤖 **AI Review:** ${safeComment}\n\n\`\`\`typescript\n${r.snippet}\n\`\`\``,
+          body: `🤖 **AI Suggestion:** ${safeComment}\n\n\`\`\`typescript\n${r.snippet}\n\`\`\``,
         };
       });
     allComments = allComments.concat(aiComments);
@@ -163,11 +161,12 @@ async function postReview(octokit, context, reviewData, automaticComments) {
       owner: context.repo.owner,
       repo: context.repo.repo,
       pull_number: context.payload.pull_request.number,
-      event: "REQUEST_CHANGES",
+      // CRITICAL: "COMMENT" ensures this does NOT block the merge
+      event: "COMMENT", 
       comments: allComments,
-      body: "⚠️ **Violations found.** Please fix the issues below.",
+      body: "⚠️ **AI Code Analysis:** I found some potential issues for you to review.",
     });
-    return "REQUEST_CHANGES";
+    return "FOUND_ISSUES";
   }
   return "APPROVE";
 }
@@ -197,15 +196,15 @@ async function run() {
     const numberedDiffLines = [];
 
     for (const lineObj of parsedLines) {
-      // Check 1: Strict JS-based Line Length Check
-      // FIX: Ignore comments (starting with // or *) and imports to allow documentation/imports
       const isIgnorable = /^\s*(\/\/|\/\*|\*|import )/.test(lineObj.content);
       
+      // Check for line length violations
       if (!isIgnorable && lineObj.content.length > CONFIG.maxLineLength) {
         automaticComments.push({
           path: lineObj.file,
           line: lineObj.line,
-          body: `📏 **Style Violation:** Line exceeds ${CONFIG.maxLineLength} characters (Current: ${lineObj.content.length}). Please break this line.`
+          body: `📏 **Style Violation:** Line exceeds ${CONFIG.maxLineLength} characters 
+                (Current: ${lineObj.content.length}). Please break this line.`
         });
       }
       
@@ -227,12 +226,11 @@ async function run() {
       return; 
     }
 
+    // Post the review (comments only)
     const finalStatus = await postReview(octokit, context, reviewData, automaticComments);
 
-    if (finalStatus === "REQUEST_CHANGES") {
-      core.setFailed(
-        "❌ Blocking Merge: Violations of Coding Guidelines found. Please fix the issues commented by the AI."
-      );
+    if (finalStatus === "FOUND_ISSUES") {
+      core.warning("⚠️ AI found potential violations. Please review the comments.");
     } else {
       console.log("No issues found.");
     }
