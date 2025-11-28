@@ -10,8 +10,7 @@ import { HttpClient } from '@angular/common/http'; // Violation: Direct HttpClie
     <!-- Violation: Using *ngIf instead of @if -->
     <div *ngIf="isVisible">
       <!-- Violation: Using ngStyle instead of ngClass -->
-      <p
-          [ngStyle]="{'color': 'red', 'font-weight': 'bold'}">
+      <p [ngStyle]="{'color': 'red', 'font-weight': 'bold'}">
         This is a test paragraph.
       </p>
     </div>
