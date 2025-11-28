@@ -95,6 +95,13 @@ function createPrompt(rules, diff) {
     - **SNIPPET:** You MUST populate the "snippet" field with the exact code you are flagging.
     - **LINE NUMBERS:** Ensure the line number matches the *new* file in the diff.
 
+    ### TEST INSTRUCTIONS (Verify these specific cases):
+    - Check for correct usage of Angular Control Flow syntax:
+      - \`@if\` blocks
+      - \`@for\` blocks
+      - \`@switch\` blocks
+    - Ensure legacy directives like \`*ngIf\` or \`*ngFor\` are FLAGGED as violations if the guidelines require the new syntax.
+
     ### TASK:
     Review the diff below. Return a JSON object.
     - If violations found -> "conclusion": "REQUEST_CHANGES".
