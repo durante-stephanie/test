@@ -31,7 +31,8 @@ export class DataService {
 
   // FIX: Replaced Observable<any> with Observable<DetailsResponse>.
   getDetails(id: number): Observable<DetailsResponse> {
-    return this.http.get<DetailsResponse>(`https://api.example.com/details/${id}`);
+    return this.http.get<DetailsResponse>
+    (`https://api.example.com/details/${id}`);
   }
 }
 
@@ -81,7 +82,7 @@ export class TestViolationComponent {
 
   doSomething() {
     // Guideline: Add double tab indentation for split lines[cite: 162].
-    this.data = 'Some very long string that is definitely going to exceed the ' +
+    this.data = 'Some very long string that is definitely going to exceed the' +
         'eighty character limit set in the editor configuration to test if ' +
         'the linter catches it properly.';
 
