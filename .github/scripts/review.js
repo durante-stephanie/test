@@ -59,6 +59,53 @@ async function getPullRequestDiff(octokit, context) {
   return prDiff;
 }
 
+// Manually parse the diff to get accurate line numbers
+// This prevents the AI from "guessing" and getting it wrong
+function parseDiffAndAddLineNumbers(diff) {
+  const lines = diff.split('\n');
+  let currentFile = '';
+  let currentLine = 0;
+  let numberedContent = [];
+
+  for (const line of lines) {
+    // Detect file header (e.g., "diff --git a/src/app.ts b/src/app.ts")
+    if (line.startsWith('diff --git')) {
+      const parts = line.split(' ');
+      // Usually the new file path is the last one or starts with b/
+      const bPath = parts.find(p => p.startsWith('b/'));
+      if (bPath) {
+        currentFile = bPath.substring(2); // Remove 'b/' prefix
+      }
+      continue;
+    }
+
+    // Detect chunk header (e.g., "@@ -10,5 +20,5 @@")
+    if (line.startsWith('@@')) {
+      const match = line.match(/\+(\d+)/);
+      if (match) {
+        currentLine = parseInt(match[1], 10);
+      }
+      continue;
+    }
+
+    // Process Content Lines
+    if (currentFile) {
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        // Line added
+        numberedContent.push(`${currentFile}:${currentLine}: ${line.substring(1)}`);
+        currentLine++;
+      } else if (line.startsWith(' ')) {
+        // Line unchanged (context)
+        numberedContent.push(`${currentFile}:${currentLine}: ${line.substring(1)}`);
+        currentLine++;
+      } else if (line.startsWith('-')) {
+        // Line removed - ignore for numbering
+      }
+    }
+  }
+  return numberedContent.join('\n');
+}
+
 function loadCodingGuidelines() {
   const workspace = process.env.GITHUB_WORKSPACE || ".";
   const standardsPath = path.join(workspace, ".github", CONFIG.files.codingStandards);
@@ -72,47 +119,36 @@ function loadCodingGuidelines() {
   return "";
 }
 
-function createPrompt(rules, diff) {
+function createPrompt(rules, numberedDiff) {
   return `
     You are a strict Senior Angular Code Reviewer.
     
     ### CODING GUIDELINES (SOURCE OF TRUTH):
     ${rules}
 
-    ### ACCURACY & ALIGNMENT INSTRUCTIONS (CRITICAL):
-    1. **Line Number Calculation:** You are reviewing a Git Diff. You must calculate the correct line number for the *NEW* file.
-       - Look for the chunk header: \`@@ -old_start,old_count +new_start,new_count @@\`
-       - The line immediately following the header is line \`new_start\`.
-       - For every subsequent line:
-         - If it starts with \` \` (space), increment the line count.
-         - If it starts with \`+\` (plus), increment the line count.
-         - If it starts with \`-\` (minus), IGNORE it (do not increment).
-       - **Assign the violation to the specific line number calculated above.** Do not guess.
-    
-    2. **Line Length:** STRICTLY enforce the 80-character limit. 
-       - Count the characters in the line.
-       - If it is > 80 chars, flag it.
-       - Do not flag lines that are 80 chars or less.
-
+    ### ACCURACY INSTRUCTIONS (CRITICAL):
+    The code below is pre-processed. Each line starts with \`filepath:lineNumber: code\`.
+    1. **Line Numbers:** You MUST use the exact line number provided in the prefix (e.g. for \`src/app.ts:42: code\`, the line is 42).
+    2. **Line Length:** When checking the 80-char limit, DO NOT count the prefix \`filepath:lineNumber: \`. Only count the code part.
     3. **Hallucination Prevention:**
-       - **Nested Subscriptions:** Only flag if you see \`.subscribe\` *inside* the callback of another \`.subscribe\`. Do not flag top-level subscriptions in methods.
-       - **Types:** Distinguish between "Forbidden usage of 'any'" (e.g. \`data: any\`) vs "Missing type" (e.g. \`data\`).
+       - **Nested Subscriptions:** Only flag \`.subscribe\` if it is *inside* the callback of another \`.subscribe\`. Flag the INNER one.
+       - **Types:** \`data: any\` is "Forbidden any". \`data\` (no type) is "Missing type".
 
     ### ADDITIONAL CHECKS:
     - **FORBIDDEN:** 'any', 'ngStyle', '*ngIf', '*ngFor'.
     - **REQUIRED:** signals, @if, @for, typed interfaces.
 
-    ### CRITICAL INSTRUCTIONS:
-    - **NO NAMES:** Do not address the user by name.
-    - **SNIPPET:** You MUST populate the "snippet" field with the exact code line you are flagging.
+    ### CRITICAL:
+    - **NO NAMES:** Do not use user names.
+    - **NO TAGS:** Escape all Angular keywords (e.g. use \`@if\`, not @if) to prevent tagging users.
 
     ### TASK:
-    Review the diff below. Return a JSON object.
+    Review the code below. Return a JSON object.
     - If violations found -> "conclusion": "REQUEST_CHANGES".
     - If code is good -> "conclusion": "APPROVE".
 
-    GIT DIFF:
-    ${diff.slice(0, CONFIG.diffLimit)} 
+    CODE TO REVIEW:
+    ${numberedDiff.slice(0, CONFIG.diffLimit)} 
   `;
 }
 
@@ -122,7 +158,8 @@ async function postReview(octokit, context, reviewData) {
   const validComments = reviewData.reviews
     .filter((r) => r.line > 0)
     .map((r) => {
-      let safeComment = r.comment.replace(/@(if|for|switch|let|case|default|else|empty)/g, '@\u200B$1');
+      // Clean up comments to prevent tagging
+      let safeComment = r.comment.replace(/(@(if|for|switch|let|case|default|else|empty))/g, '`$1`');
       
       return {
         path: r.path,
@@ -166,8 +203,10 @@ async function run() {
       return;
     }
 
+    // Parse the diff to add explicit line numbers for the AI
+    const numberedDiff = parseDiffAndAddLineNumbers(prDiff);
     const rules = loadCodingGuidelines();
-    const prompt = createPrompt(rules, prDiff);
+    const prompt = createPrompt(rules, numberedDiff);
 
     console.log(`Sending diff to ${CONFIG.modelName}...`);
     const result = await model.generateContent(prompt);
