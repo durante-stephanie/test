@@ -27,7 +27,7 @@ export class DataService {
 
   getDetails(id: number): Observable<DetailsResponse> {
     return this.http.get<DetailsResponse>
-    (`https://api.example.com/details/${id}`);
+    	(`https://api.example.com/details/${id}`);
   }
 }
 
@@ -69,20 +69,21 @@ export class TestViolationComponent {
   items = ['Item 1', 'Item 2', 'Item 3'];
 
   // Guideline: Group similar structures (private properties/injects)[cite: 78].
-  private dataService = inject(DataService); 
+  private dataService = inject(DataService);
   
   // Guideline: Never use the any type.
   data: string | undefined;
 
   doSomething(): void {
     // Guideline: Add double tab indentation for split lines[cite: 162].
-    this.data = 'Some very long string that is definitely going to exceed the ' +
+    this.data = 'Some very long string that is definitely going to exceed the' +
         'eighty character limit set in the editor configuration to test if ' +
         'the linter catches it properly.';
 
     // Guideline: Use pipe() and RXJS operators[cite: 220].
     this.dataService.getData().pipe(
-      switchMap((response: DataResponse) => this.dataService.getDetails(response.id)),
+      switchMap((response: DataResponse) => this.dataService.getDetails
+			(response.id)),
       catchError((err) => {
         console.error('Failed to load data/details:', err);
         return EMPTY;
