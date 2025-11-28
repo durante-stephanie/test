@@ -12,7 +12,7 @@ const CONFIG = {
     copilotInstructions: "copilot-instructions.md",
   },
   diffLimit: 40000,
-  maxLineLength: 80, // STRICT 80 char limit handled by JS
+  maxLineLength: 80, // Hard limit handled by JS
 };
 
 // --- Helper Functions ---
@@ -60,9 +60,7 @@ async function getPullRequestDiff(octokit, context) {
   return prDiff;
 }
 
-// ------------------------------------------------------------------
-// CRITICAL FIX: Manually parse Diff to get EXACT Line Numbers
-// ------------------------------------------------------------------
+// Manually parse the diff to get accurate line numbers
 function parseDiff(diff) {
   const lines = diff.split('\n');
   let currentFile = '';
@@ -70,27 +68,22 @@ function parseDiff(diff) {
   let parsedLines = [];
 
   for (const line of lines) {
-    // 1. Detect File Changes
     if (line.startsWith('diff --git')) {
       const parts = line.split(' ');
       const bPath = parts.find(p => p.startsWith('b/'));
-      if (bPath) currentFile = bPath.substring(2); // Remove 'b/'
+      if (bPath) currentFile = bPath.substring(2);
       continue;
     }
 
-    // 2. Detect Chunk Headers (e.g., @@ -10,5 +20,5 @@)
-    // The second number set (+20,5) is the NEW file coordinates
     if (line.startsWith('@@')) {
       const match = line.match(/\+(\d+)/);
       if (match) currentLine = parseInt(match[1], 10);
       continue;
     }
 
-    // 3. Process Code Lines
     if (currentFile) {
       if (line.startsWith('+') && !line.startsWith('+++')) {
-        // This is a NEW line added by the user. We review this.
-        const content = line.substring(1); // Remove the '+'
+        const content = line.substring(1);
         parsedLines.push({
           file: currentFile,
           line: currentLine,
@@ -98,10 +91,7 @@ function parseDiff(diff) {
         });
         currentLine++;
       } else if (line.startsWith(' ') && !line.startsWith('+++')) {
-        // Unchanged line (context), just increment counter
         currentLine++;
-      } else if (line.startsWith('-')) {
-        // Deleted line, ignore for numbering of new file
       }
     }
   }
@@ -125,19 +115,20 @@ function createPrompt(rules, numberedDiffString) {
   return `
     You are a strict Senior Angular Code Reviewer.
     
-    ### CODING GUIDELINES:
+    ### CODING GUIDELINES (SOURCE OF TRUTH):
     ${rules}
 
-    ### ACCURACY INSTRUCTIONS (CRITICAL):
-    The code below is provided as: \`FILENAME:LINENUMBER:CODE_CONTENT\`.
-    1. **Line Numbers:** You MUST use the exact line number provided in the prefix. Do NOT calculate it yourself.
+    ### ACCURACY INSTRUCTIONS:
+    The code provided below is in the format: \`FILE:LINE:CONTENT\`.
+    1. **Line Numbers:** You MUST return the exact line number provided in the line prefix.
     2. **Line Length:** IGNORE line length violations. The system checks this automatically.
-    3. **Hallucination Prevention:**
-       - **Nested Subscriptions:** Only flag \`.subscribe\` if you clearly see it *inside* another \`.subscribe\` block.
-       - **Types:** \`data: any\` is "Forbidden any". \`data\` (no type) is "Missing type".
-
+    
+    ### HALLUCINATION PREVENTION (CRITICAL):
+    - **Inferred Types:** Do NOT flag missing types for arrow function parameters in callbacks (e.g. \`.subscribe(data => ...)\` is OK). Only flag missing types in explicit function declarations.
+    - **Nested Subscriptions:** Only flag \`.subscribe\` if you clearly see it *inside* another \`.subscribe\` block.
+    
     ### OUTPUT RULES:
-    - **No Tags:** Escape all Angular keywords (use \`@if\`, not @if) to avoid tagging users.
+    - **No Tags:** Escape all Angular keywords (use \`@if\`, not @if).
     - **Snippet:** Copy the code content exactly into the snippet field.
 
     ### TASK:
@@ -151,16 +142,13 @@ function createPrompt(rules, numberedDiffString) {
 }
 
 async function postReview(octokit, context, reviewData, automaticComments) {
-  // Merge AI comments with Automatic (JS-based) comments
   let allComments = [...automaticComments];
 
   if (reviewData.reviews && reviewData.reviews.length > 0) {
     const aiComments = reviewData.reviews
       .filter((r) => r.line > 0)
       .map((r) => {
-        // Sanitize comments to prevent tagging
         let safeComment = r.comment.replace(/(@(if|for|switch|let|case|default|else|empty))/g, '`$1`');
-        
         return {
           path: r.path,
           line: r.line,
@@ -175,7 +163,7 @@ async function postReview(octokit, context, reviewData, automaticComments) {
       owner: context.repo.owner,
       repo: context.repo.repo,
       pull_number: context.payload.pull_request.number,
-      event: "REQUEST_CHANGES", 
+      event: "REQUEST_CHANGES",
       comments: allComments,
       body: "⚠️ **Violations found.** Please fix the issues below.",
     });
@@ -204,15 +192,16 @@ async function run() {
       return;
     }
 
-    // 1. Parse Diff and Run Automatic Checks (100% Accurate)
     const parsedLines = parseDiff(prDiff);
     const automaticComments = [];
     const numberedDiffLines = [];
 
     for (const lineObj of parsedLines) {
       // Check 1: Strict JS-based Line Length Check
-      // We check content length. Note: Tabs/Spacing count as characters.
-      if (lineObj.content.length > CONFIG.maxLineLength) {
+      // FIX: Ignore comments (starting with // or *) and imports to allow documentation/imports
+      const isIgnorable = /^\s*(\/\/|\/\*|\*|import )/.test(lineObj.content);
+      
+      if (!isIgnorable && lineObj.content.length > CONFIG.maxLineLength) {
         automaticComments.push({
           path: lineObj.file,
           line: lineObj.line,
@@ -220,11 +209,9 @@ async function run() {
         });
       }
       
-      // Prepare content for AI (adding line numbers so AI doesn't guess)
       numberedDiffLines.push(`${lineObj.file}:${lineObj.line}:${lineObj.content}`);
     }
 
-    // 2. Run AI Review for Logic/Syntax (Nested subs, types, etc.)
     const rules = loadCodingGuidelines();
     const prompt = createPrompt(rules, numberedDiffLines.join('\n'));
 
@@ -240,7 +227,6 @@ async function run() {
       return; 
     }
 
-    // 3. Post All Reviews (Automatic + AI)
     const finalStatus = await postReview(octokit, context, reviewData, automaticComments);
 
     if (finalStatus === "REQUEST_CHANGES") {
