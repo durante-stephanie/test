@@ -4,14 +4,20 @@ import { HttpClient } from '@angular/common/http';
 import { switchMap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
 
-// [cite: 51] Always use type keyword to structure an object instead of interface.
-// [cite: 62] Use Pascal case for type aliases.
+// Guideline: Use Pascal case for type aliases[cite: 62].
+// Guideline: Always use type keyword to structure an object instead of interface[cite: 51].
 export type DataResponse = {
   id: number;
   content: string;
 };
 
-//  Create a service to implement HTTP requests. Do not use HttpClient directly in component.
+// FIX: Added a specific type model for the details response to avoid 'any'.
+export type DetailsResponse = {
+  id: number;
+  details: string;
+  timestamp: string;
+};
+
 @Injectable({
   providedIn: 'root'
 })
@@ -19,12 +25,13 @@ export class DataService {
   private http = inject(HttpClient);
 
   getData(): Observable<DataResponse> {
-    // [cite: 206] Always create a model to structure HTTP response. (Using DataResponse)
+    // Guideline: Always create a model to structure HTTP response.
     return this.http.get<DataResponse>('https://api.example.com/data');
   }
 
-  getDetails(id: number): Observable<any> {
-    return this.http.get(`https://api.example.com/details/${id}`);
+  // FIX: Replaced Observable<any> with Observable<DetailsResponse>.
+  getDetails(id: number): Observable<DetailsResponse> {
+    return this.http.get<DetailsResponse>(`https://api.example.com/details/${id}`);
   }
 }
 
@@ -48,14 +55,13 @@ export class DataService {
     <button (click)="doSomething()">Click Me</button>
   `,
   styles: [`
-    /*  When using ::ng-deep, include it in a parent container such as :host */
+    /* Guideline: Include ::ng-deep in a parent container like :host[cite: 81]. */
     :host {
       ::ng-deep .custom-class {
         background-color: yellow;
       }
     }
 
-    /* Moved from ngStyle to CSS class per  */
     .highlight-text {
       color: red;
       font-weight: bold;
@@ -63,26 +69,24 @@ export class DataService {
   `]
 })
 export class TestViolationComponent {
-  //  Take advantage of TS inference type. Do not specify type for primitive with initial value.
+  // Guideline: Take advantage of TS inference type for primitives[cite: 116].
   isVisible = true;
   items = ['Item 1', 'Item 2', 'Item 3'];
 
-  // [cite: 78] Group similar structures (private properties/injects).
+  // Guideline: Group similar structures (private properties/injects)[cite: 78].
   private dataService = inject(DataService); 
   
-  // [cite: 57] Never use the any type. 
-  // [cite: 121] If declaring object variable from type without value, specify type.
+  // Guideline: Never use the any type.
   data: string | undefined;
 
   doSomething() {
-    // [cite: 162] When splitting element to multiple lines, add double tab indentation.
-    // Broken into concatenated strings to fix line length violation.
+    // Guideline: Add double tab indentation for split lines[cite: 162].
     this.data = 'Some very long string that is definitely going to exceed the ' +
         'eighty character limit set in the editor configuration to test if ' +
         'the linter catches it properly.';
 
-    // [cite: 219] Do not create observable inside a subscription.
-    // [cite: 220] Use pipe() and RXJS operators (switchMap) to chain operations.
+    // Guideline: Do not create observable inside a subscription (nesting)[cite: 219].
+    // Guideline: Use pipe() and RXJS operators[cite: 220].
     this.dataService.getData().pipe(
       switchMap((response) => this.dataService.getDetails(response.id))
     ).subscribe((details) => {
