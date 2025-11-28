@@ -12,6 +12,7 @@ const CONFIG = {
     copilotInstructions: "copilot-instructions.md",
   },
   diffLimit: 40000,
+  maxLineLength: 80, // STRICT 80 char limit handled by JS
 };
 
 // --- Helper Functions ---
@@ -59,51 +60,52 @@ async function getPullRequestDiff(octokit, context) {
   return prDiff;
 }
 
-// Manually parse the diff to get accurate line numbers
-// This prevents the AI from "guessing" and getting it wrong
-function parseDiffAndAddLineNumbers(diff) {
+// ------------------------------------------------------------------
+// CRITICAL FIX: Manually parse Diff to get EXACT Line Numbers
+// ------------------------------------------------------------------
+function parseDiff(diff) {
   const lines = diff.split('\n');
   let currentFile = '';
   let currentLine = 0;
-  let numberedContent = [];
+  let parsedLines = [];
 
   for (const line of lines) {
-    // Detect file header (e.g., "diff --git a/src/app.ts b/src/app.ts")
+    // 1. Detect File Changes
     if (line.startsWith('diff --git')) {
       const parts = line.split(' ');
-      // Usually the new file path is the last one or starts with b/
       const bPath = parts.find(p => p.startsWith('b/'));
-      if (bPath) {
-        currentFile = bPath.substring(2); // Remove 'b/' prefix
-      }
+      if (bPath) currentFile = bPath.substring(2); // Remove 'b/'
       continue;
     }
 
-    // Detect chunk header (e.g., "@@ -10,5 +20,5 @@")
+    // 2. Detect Chunk Headers (e.g., @@ -10,5 +20,5 @@)
+    // The second number set (+20,5) is the NEW file coordinates
     if (line.startsWith('@@')) {
       const match = line.match(/\+(\d+)/);
-      if (match) {
-        currentLine = parseInt(match[1], 10);
-      }
+      if (match) currentLine = parseInt(match[1], 10);
       continue;
     }
 
-    // Process Content Lines
+    // 3. Process Code Lines
     if (currentFile) {
       if (line.startsWith('+') && !line.startsWith('+++')) {
-        // Line added
-        numberedContent.push(`${currentFile}:${currentLine}: ${line.substring(1)}`);
+        // This is a NEW line added by the user. We review this.
+        const content = line.substring(1); // Remove the '+'
+        parsedLines.push({
+          file: currentFile,
+          line: currentLine,
+          content: content
+        });
         currentLine++;
-      } else if (line.startsWith(' ')) {
-        // Line unchanged (context)
-        numberedContent.push(`${currentFile}:${currentLine}: ${line.substring(1)}`);
+      } else if (line.startsWith(' ') && !line.startsWith('+++')) {
+        // Unchanged line (context), just increment counter
         currentLine++;
       } else if (line.startsWith('-')) {
-        // Line removed - ignore for numbering
+        // Deleted line, ignore for numbering of new file
       }
     }
   }
-  return numberedContent.join('\n');
+  return parsedLines;
 }
 
 function loadCodingGuidelines() {
@@ -119,68 +121,67 @@ function loadCodingGuidelines() {
   return "";
 }
 
-function createPrompt(rules, numberedDiff) {
+function createPrompt(rules, numberedDiffString) {
   return `
     You are a strict Senior Angular Code Reviewer.
     
-    ### CODING GUIDELINES (SOURCE OF TRUTH):
+    ### CODING GUIDELINES:
     ${rules}
 
     ### ACCURACY INSTRUCTIONS (CRITICAL):
-    The code below is pre-processed. Each line starts with \`filepath:lineNumber: code\`.
-    1. **Line Numbers:** You MUST use the exact line number provided in the prefix (e.g. for \`src/app.ts:42: code\`, the line is 42).
-    2. **Line Length:** When checking the 80-char limit, DO NOT count the prefix \`filepath:lineNumber: \`. Only count the code part.
+    The code below is provided as: \`FILENAME:LINENUMBER:CODE_CONTENT\`.
+    1. **Line Numbers:** You MUST use the exact line number provided in the prefix. Do NOT calculate it yourself.
+    2. **Line Length:** IGNORE line length violations. The system checks this automatically.
     3. **Hallucination Prevention:**
-       - **Nested Subscriptions:** Only flag \`.subscribe\` if it is *inside* the callback of another \`.subscribe\`. Flag the INNER one.
+       - **Nested Subscriptions:** Only flag \`.subscribe\` if you clearly see it *inside* another \`.subscribe\` block.
        - **Types:** \`data: any\` is "Forbidden any". \`data\` (no type) is "Missing type".
 
-    ### ADDITIONAL CHECKS:
-    - **FORBIDDEN:** 'any', 'ngStyle', '*ngIf', '*ngFor'.
-    - **REQUIRED:** signals, @if, @for, typed interfaces.
-
-    ### CRITICAL:
-    - **NO NAMES:** Do not use user names.
-    - **NO TAGS:** Escape all Angular keywords (e.g. use \`@if\`, not @if) to prevent tagging users.
+    ### OUTPUT RULES:
+    - **No Tags:** Escape all Angular keywords (use \`@if\`, not @if) to avoid tagging users.
+    - **Snippet:** Copy the code content exactly into the snippet field.
 
     ### TASK:
-    Review the code below. Return a JSON object.
+    Review the code lines below. Return a JSON object.
     - If violations found -> "conclusion": "REQUEST_CHANGES".
     - If code is good -> "conclusion": "APPROVE".
 
     CODE TO REVIEW:
-    ${numberedDiff.slice(0, CONFIG.diffLimit)} 
+    ${numberedDiffString.slice(0, CONFIG.diffLimit)} 
   `;
 }
 
-async function postReview(octokit, context, reviewData) {
-  if (!reviewData.reviews || reviewData.reviews.length === 0) return;
+async function postReview(octokit, context, reviewData, automaticComments) {
+  // Merge AI comments with Automatic (JS-based) comments
+  let allComments = [...automaticComments];
 
-  const validComments = reviewData.reviews
-    .filter((r) => r.line > 0)
-    .map((r) => {
-      // Clean up comments to prevent tagging
-      let safeComment = r.comment.replace(/(@(if|for|switch|let|case|default|else|empty))/g, '`$1`');
-      
-      return {
-        path: r.path,
-        line: r.line,
-        body: `🤖 **AI Review:** ${safeComment}\n\n\`\`\`typescript\n${r.snippet}\n\`\`\``,
-      };
-    });
+  if (reviewData.reviews && reviewData.reviews.length > 0) {
+    const aiComments = reviewData.reviews
+      .filter((r) => r.line > 0)
+      .map((r) => {
+        // Sanitize comments to prevent tagging
+        let safeComment = r.comment.replace(/(@(if|for|switch|let|case|default|else|empty))/g, '`$1`');
+        
+        return {
+          path: r.path,
+          line: r.line,
+          body: `🤖 **AI Review:** ${safeComment}\n\n\`\`\`typescript\n${r.snippet}\n\`\`\``,
+        };
+      });
+    allComments = allComments.concat(aiComments);
+  }
 
-  if (validComments.length > 0) {
+  if (allComments.length > 0) {
     await octokit.rest.pulls.createReview({
       owner: context.repo.owner,
       repo: context.repo.repo,
       pull_number: context.payload.pull_request.number,
-      event: reviewData.conclusion,
-      comments: validComments,
-      body:
-        reviewData.conclusion === "APPROVE"
-          ? "✅ Code looks good."
-          : "⚠️ **Violations found.** Please fix the issues below.",
+      event: "REQUEST_CHANGES", 
+      comments: allComments,
+      body: "⚠️ **Violations found.** Please fix the issues below.",
     });
+    return "REQUEST_CHANGES";
   }
+  return "APPROVE";
 }
 
 async function run() {
@@ -203,12 +204,31 @@ async function run() {
       return;
     }
 
-    // Parse the diff to add explicit line numbers for the AI
-    const numberedDiff = parseDiffAndAddLineNumbers(prDiff);
-    const rules = loadCodingGuidelines();
-    const prompt = createPrompt(rules, numberedDiff);
+    // 1. Parse Diff and Run Automatic Checks (100% Accurate)
+    const parsedLines = parseDiff(prDiff);
+    const automaticComments = [];
+    const numberedDiffLines = [];
 
-    console.log(`Sending diff to ${CONFIG.modelName}...`);
+    for (const lineObj of parsedLines) {
+      // Check 1: Strict JS-based Line Length Check
+      // We check content length. Note: Tabs/Spacing count as characters.
+      if (lineObj.content.length > CONFIG.maxLineLength) {
+        automaticComments.push({
+          path: lineObj.file,
+          line: lineObj.line,
+          body: `📏 **Style Violation:** Line exceeds ${CONFIG.maxLineLength} characters (Current: ${lineObj.content.length}). Please break this line.`
+        });
+      }
+      
+      // Prepare content for AI (adding line numbers so AI doesn't guess)
+      numberedDiffLines.push(`${lineObj.file}:${lineObj.line}:${lineObj.content}`);
+    }
+
+    // 2. Run AI Review for Logic/Syntax (Nested subs, types, etc.)
+    const rules = loadCodingGuidelines();
+    const prompt = createPrompt(rules, numberedDiffLines.join('\n'));
+
+    console.log(`Sending content to ${CONFIG.modelName}...`);
     const result = await model.generateContent(prompt);
     const responseText = result.response.text();
 
@@ -220,9 +240,10 @@ async function run() {
       return; 
     }
 
-    await postReview(octokit, context, reviewData);
+    // 3. Post All Reviews (Automatic + AI)
+    const finalStatus = await postReview(octokit, context, reviewData, automaticComments);
 
-    if (reviewData.conclusion === "REQUEST_CHANGES") {
+    if (finalStatus === "REQUEST_CHANGES") {
       core.setFailed(
         "❌ Blocking Merge: Violations of Coding Guidelines found. Please fix the issues commented by the AI."
       );
