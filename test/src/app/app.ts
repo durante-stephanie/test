@@ -15,6 +15,9 @@ export type DetailsResponse = {
   timestamp: string;
 };
 
+// Use `type` for structured objects as per repository guidelines
+export type Item = { id: number; label: string };
+
 @Injectable({
   providedIn: 'root'
 })
@@ -66,7 +69,7 @@ export class DataService {
 export class TestViolationComponent {
   // Guideline: Take advantage of TS inference type for primitives[cite: 116].
   isVisible = true;
-  items: { id: number; label: string }[] = [
+  items: Item[] = [
     { id: 1, label: 'Item 1' },
     { id: 2, label: 'Item 2' },
     { id: 3, label: 'Item 3' }
@@ -82,9 +85,11 @@ export class TestViolationComponent {
 
   doSomething(): void {
     // Guideline: Add double tab indentation for split lines[cite: 162].
-    this.data = 'Some very long string that is definitely going to exceed the' +
+    this.data = (
+      'Some very long string that is definitely going to exceed the ' +
       'eighty character limit set in the editor configuration to test if ' +
-      'the linter catches it properly.';
+      'the linter catches it properly.'
+    );
 
     // Guideline: Use pipe() and RXJS operators[cite: 220].
     this.dataService.getData().pipe(
