@@ -1,48 +1,50 @@
-import { Component, signal } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
+import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpClient } from '@angular/common/http'; // Violation: Direct HttpClient usage
 
 @Component({
-  selector: 'app-root',
+  selector: 'app-test-violation',
   standalone: true,
-  imports: [RouterOutlet, CommonModule],
+  imports: [CommonModule],
   template: `
-    <!-- CORRECT: Using new control flow syntax -->
-    @if (isVisible()) {
-      <div>Content is visible</div>
+    <!-- Violation: Using *ngIf instead of @if -->
+    <div *ngIf="isVisible">
+      <!-- Violation: Using ngStyle instead of ngClass -->
+      <p [ngStyle]="{'color': 'red', 'font-weight': 'bold'}">This is a test paragraph.</p>
+    </div>
+
+    <!-- Violation: Using *ngFor instead of @for -->
+    <ul>
+      <li *ngFor="let item of items">{{ item }}</li>
+    </ul>
+
+    <button (click)="doSomething()">Click Me</button>
+  `,
+  // Violation: ::ng-deep without :host wrapper
+  styles: [`
+    ::ng-deep .custom-class {
+      background-color: yellow;
     }
-
-    <!-- VIOLATION: Using legacy *ngIf (should be flagged) -->
-    <div *ngIf="isVisible()">Legacy content</div>
-
-    <!-- CORRECT: Using new control flow syntax for loop -->
-    @for (item of items(); track item.id) {
-      <div>{{ item.name }}</div>
-    }
-
-    <!-- VIOLATION: Using legacy *ngFor (should be flagged) -->
-    <div *ngFor="let item of items()">{{ item.name }}</div>
-
-    <!-- CORRECT: Using new control flow syntax for switch -->
-    @switch (role()) {
-      @case ('admin') { <p>Welcome Admin</p> }
-      @case ('user') { <p>Welcome User</p> }
-      @default { <p>Welcome Guest</p> }
-    }
-
-    <!-- VIOLATION: Using ngStyle (should be flagged) -->
-    <div [ngStyle]="{'color': 'red'}">Styled Text</div>
-  `
+  `]
 })
-export class App {
-  // CORRECT: Using signals
-  protected readonly isVisible = signal(true);
-  protected readonly items = signal([{id: 1, name: 'Item 1'}, {id: 2, name: 'Item 2'}]);
-  protected readonly role = signal('admin');
+export class TestViolationComponent {
+  // Violation: Using 'any' type
+  data: any;
+  isVisible = true;
+  items = ['Item 1', 'Item 2', 'Item 3'];
 
-  // VIOLATION: Explicit 'any' type (should be flagged)
-  processData(data: any) {
-    console.log(data);
+  // Violation: Direct HttpClient injection in component
+  constructor(private http: HttpClient) {}
+
+  // Violation: Line exceeds 80 characters
+  doSomething() {
+    this.data = "Some very long string that is definitely going to exceed the eighty character limit set in the editor configuration to test if the linter catches it properly.";
+    
+    // Violation: Nested subscription
+    this.http.get('https://api.example.com/data').subscribe((response: any) => {
+      this.http.get('https://api.example.com/details/' + response.id).subscribe((details) => {
+        console.log(details);
+      });
+    });
   }
 }
-
