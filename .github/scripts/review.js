@@ -13,7 +13,7 @@ async function run() {
       return;
     }
 
-    // 1. Initialize Gemini with JSON Schema enforcement
+    // 1. Initialize Gemini
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
@@ -66,43 +66,39 @@ async function run() {
 
     // 4. Read Coding Standards
     let codingStandards = "Follow general Angular best practices.";
-    // Try to find the file in probable locations
-    const possiblePaths = [
-      ".github/Coding Guidelines/CODING_STANDARDS.md",
-      "Coding Guidelines/CODING_STANDARDS.md",
-      ".github/CODING_STANDARDS.md"
-    ];
-
-    for (const path of possiblePaths) {
-      if (fs.existsSync(path)) {
-        codingStandards = fs.readFileSync(path, "utf8");
-        console.log(`Loaded coding standards from: ${path}`);
-        break;
+    try {
+      if (fs.existsSync("Coding Guidelines/CODING_STANDARDS.md")) {
+        codingStandards = fs.readFileSync("Coding Guidelines/CODING_STANDARDS.md", "utf8");
       }
+    } catch (e) {
+      console.log("Could not read CODING_STANDARDS.md");
     }
 
-    // 5. Build Prompt for "Inline" Review
+    // 5. Prompt with Strict Formatting Rules
     const prompt = `
       You are a strict Code Reviewer for an Angular project.
       
       YOUR RULES:
       ${codingStandards}
 
+      CRITICAL FORMATTING RULES (DO NOT IGNUORE):
+      1. **NEVER** output plain text starting with "@" (like @if, @for). GitHub treats these as user tags.
+      2. **ALWAYS** wrap Angular control flow syntax in backticks: \`@if\`, \`@for\`, \`@switch\`.
+      
       TASK:
       Review the provided Git Diff. Identify violations of the rules.
-      For every violation, output a review comment.
       
       IMPORTANT FOR MAPPING:
       - "path": Must match the file path in the diff exactly.
       - "line": Must be the line number in the NEW file (the 'right' side of the diff) where the error occurs.
-      - "comment": Explain the error and provide the fix (e.g., "Use @if instead of *ngIf").
-      - "conclusion": If there are violations, return "REQUEST_CHANGES". If perfect, "APPROVE".
+      - "comment": Explain the error and fix. REMEMBER TO USE BACKTICKS for \`@if\`, etc.
+      - "conclusion": Return "REQUEST_CHANGES" if there are violations, otherwise "APPROVE".
 
       GIT DIFF TO REVIEW:
       ${prDiff.substring(0, 30000)}
     `;
 
-    // 6. Generate JSON Response
+    // 6. Generate Review
     const result = await model.generateContent(prompt);
     const response = result.response;
     const text = response.text();
@@ -116,8 +112,7 @@ async function run() {
       return;
     }
 
-    // 7. Post the Review to GitHub
-    // We only post comments if they exist.
+    // 7. Post Review Comments
     const comments = reviewData.reviews.map(review => ({
       path: review.path,
       line: review.line,
@@ -129,7 +124,7 @@ async function run() {
         owner,
         repo,
         pull_number: prNumber,
-        event: reviewData.conclusion, // APPROVE or REQUEST_CHANGES
+        event: reviewData.conclusion, 
         comments: comments,
         body: reviewData.conclusion === 'REQUEST_CHANGES' 
           ? "⚠️ **Code Guidelines Violation:** Please fix the issues below." 
@@ -137,7 +132,7 @@ async function run() {
       });
     }
 
-    // 8. BLOCK THE MERGE if changes are requested
+    // 8. Block Merge if needed
     if (reviewData.conclusion === "REQUEST_CHANGES") {
       core.setFailed("The AI Code Reviewer found violations. Please fix them before merging.");
     }
