@@ -43,8 +43,8 @@ export class DataService {
     }
 
     <ul>
-      @for (item of items; track item) {
-        <li>{{ item }}</li>
+      @for (item of items; track item.id) {
+        <li>{{ item.label }}</li>
       }
     </ul>
 
@@ -66,19 +66,25 @@ export class DataService {
 export class TestViolationComponent {
   // Guideline: Take advantage of TS inference type for primitives[cite: 116].
   isVisible = true;
-  items = ['Item 1', 'Item 2', 'Item 3'];
+  items: { id: number; label: string }[] = [
+    { id: 1, label: 'Item 1' },
+    { id: 2, label: 'Item 2' },
+    { id: 3, label: 'Item 3' }
+  ];
 
-  // Guideline: Group similar structures (private properties/injects)[cite: 78].
-  private dataService = inject(DataService);
-  
   // Guideline: Never use the any type.
   data: string | undefined;
+
+  // Guideline: Group similar structures (private properties/injects)[cite: 78].
+  // Private/injected properties should be grouped together and placed after
+  // public properties.
+  private dataService = inject(DataService);
 
   doSomething(): void {
     // Guideline: Add double tab indentation for split lines[cite: 162].
     this.data = 'Some very long string that is definitely going to exceed the' +
-        'eighty character limit set in the editor configuration to test if ' +
-        'the linter catches it properly.';
+      'eighty character limit set in the editor configuration to test if ' +
+      'the linter catches it properly.';
 
     // Guideline: Use pipe() and RXJS operators[cite: 220].
     this.dataService.getData().pipe(
