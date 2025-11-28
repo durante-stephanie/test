@@ -1,8 +1,8 @@
 import { Component, Injectable, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { switchMap } from 'rxjs/operators';
-import { Observable } from 'rxjs';
+import { switchMap, catchError } from 'rxjs/operators';
+import { Observable, EMPTY } from 'rxjs';
 
 export type DataResponse = {
   id: number;
@@ -74,16 +74,20 @@ export class TestViolationComponent {
   // Guideline: Never use the any type.
   data: string | undefined;
 
-  doSomething() {
+  doSomething(): void {
     // Guideline: Add double tab indentation for split lines[cite: 162].
-    this.data = 'Some very long string that is definitely going to exceed the' +
+    this.data = 'Some very long string that is definitely going to exceed the ' +
         'eighty character limit set in the editor configuration to test if ' +
         'the linter catches it properly.';
 
     // Guideline: Use pipe() and RXJS operators[cite: 220].
     this.dataService.getData().pipe(
-      switchMap((response) => this.dataService.getDetails(response.id))
-    ).subscribe((details) => {
+      switchMap((response: DataResponse) => this.dataService.getDetails(response.id)),
+      catchError((err) => {
+        console.error('Failed to load data/details:', err);
+        return EMPTY;
+      })
+    ).subscribe((details: DetailsResponse) => {
       console.log(details);
     });
   }
