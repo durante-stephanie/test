@@ -7,7 +7,6 @@ const path = require("path");
 const CONFIG = {
   modelName: "gemini-2.5-flash",
   files: {
-    codingStandards: "Coding Guidelines/CODING_STANDARDS.md",
     copilotInstructions: "copilot-instructions.md",
   },
   diffLimit: 40000,
@@ -96,7 +95,6 @@ function parseDiff(diff) {
 
 function loadCodingGuidelines() {
   const workspace = process.env.GITHUB_WORKSPACE || ".";
-  const standardsPath = path.join(workspace, ".github", CONFIG.files.codingStandards);
   const fallbackPath = path.join(workspace, ".github", CONFIG.files.copilotInstructions);
 
   if (fs.existsSync(standardsPath)) {
@@ -150,7 +148,7 @@ async function postReview(octokit, context, reviewData, automaticComments) {
         return {
           path: r.path,
           line: r.line,
-          body: `🤖 **AI Suggestion:** ${safeComment}\n\n\`\`\`typescript\n${r.snippet}\n\`\`\``,
+          body: `🤖 **AI Review:** ${safeComment}\n\n\`\`\`typescript\n${r.snippet}\n\`\`\``,
         };
       });
     allComments = allComments.concat(aiComments);
@@ -161,7 +159,6 @@ async function postReview(octokit, context, reviewData, automaticComments) {
       owner: context.repo.owner,
       repo: context.repo.repo,
       pull_number: context.payload.pull_request.number,
-      // CRITICAL: "COMMENT" ensures this does NOT block the merge
       event: "COMMENT", 
       comments: allComments,
       body: "⚠️ **AI Code Analysis:** I found some potential issues for you to review.",
