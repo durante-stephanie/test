@@ -42,7 +42,7 @@ export class TestViolationComponent {
     
     // Violation: Nested subscription
     this.http.get('https://api.example.com/data')
-      .subscribe((response: any) => {
+    .subscribe((response: any) => {
       this.http.get('https://api.example.com/details/' + response.id).subscribe((details) => {
         console.log(details);
       });
